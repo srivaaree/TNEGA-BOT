@@ -1,8 +1,8 @@
-﻿# utils/scraper.py
-# Coordinate-click scraper — fills ack input and clicks to the right of it to hit the small search icon.
+# utils/scraper.py
+# Stable Playwright scraper for TN e-District VerifyCerti.xhtml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout, Error as PWError
 from pathlib import Path
-import time, traceback, json
+import time, traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 SCREENSHOT_DIR = ROOT / "screenshots"
@@ -15,87 +15,85 @@ def query_tnedistrict_status(app_no: str, headless: bool = True, timeout_ms: int
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=headless, args=["--no-sandbox"])
-            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            page = context.new_page()
+            ctx = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            page = ctx.new_page()
             page.set_default_navigation_timeout(timeout_ms)
 
             page.goto(VERIFY_PAGE, wait_until="load", timeout=timeout_ms)
             out["page_url"] = page.url
             page.wait_for_timeout(900)
 
-            # debug frames
             out["debug"]["frames"] = [{"url": f.url, "name": f.name} for f in page.frames]
 
-            # Try to locate the ack input explicitly
-            ack_selectors = ["#form1\\:acknumber","input[id*='ack']","input[name*='ack']","input[type='text']"]
-            filled = False
-            used_selector = None
+            # Try precise selectors first, then fallbacks
+            ack_selectors = [
+                "#form1\\:acknumber",        # precise JSF id if present
+                "input[id*='ack']",          # any id containing ack
+                "input[name*='ack']",
+                "input[placeholder*='ack']",
+                "input[type='text']"
+            ]
+
+            filled_sel = None
+            out["debug"]["fill_attempts"] = []
             for sel in ack_selectors:
                 try:
                     page.wait_for_selector(sel, timeout=2500)
                     page.fill(sel, app_no, timeout=2000)
-                    used_selector = sel
-                    out["debug"].setdefault("fill_attempts", []).append({"selector": sel, "ok": True})
-                    filled = True
+                    out["debug"]["fill_attempts"].append({"selector": sel, "ok": True})
+                    filled_sel = sel
                     break
                 except Exception as e:
-                    out["debug"].setdefault("fill_attempts", []).append({"selector": sel, "ok": False, "error": str(e)})
+                    out["debug"]["fill_attempts"].append({"selector": sel, "ok": False, "error": str(e)})
 
-            if not filled:
-                # screenshot and return debug
+            if not filled_sel:
                 ss = SCREENSHOT_DIR / f"no_fill_{app_no}_{int(time.time())}.png"
                 page.screenshot(path=str(ss), full_page=True)
-                out["screenshot"] = str(ss)
-                out["raw_text"] = page.content()[:2000]
+                out.update({"screenshot": str(ss), "raw_text": (page.content()[:2000] if page else "")})
                 out["status"] = "error"
                 page.close(); browser.close()
                 return out
 
-            # Get bounding box of the used input and click to the right (coordinate-based)
+            # Compute bounding box and click to the right (search icon)
+            out["debug"]["click_attempts"] = []
             try:
-                handle = page.query_selector(used_selector)
+                handle = page.query_selector(filled_sel)
                 box = handle.bounding_box()
                 if not box:
-                    raise Exception("bounding_box returned None")
-                # click a bit to the right and vertically centered on the input (offset 30 px to right, adjust if needed)
-                click_x = box["x"] + box["width"] + 18
-                click_y = box["y"] + box["height"]/2
-                # do the click
+                    raise Exception("bounding_box() returned None")
+                click_x = box["x"] + box["width"] + 18  # 18px right of input
+                click_y = box["y"] + box["height"] / 2
                 page.wait_for_timeout(300)
-    page.mouse.click(click_x, click_y)
-                page.mouse.click(click_x, click_y)
-                out["debug"]["click_attempts"] = [{"method":"coord_click","x":click_x,"y":click_y,"ok":True}]
-                page.wait_for_timeout(1600)
+                page.mouse.click(click_x, click_y)   # no timeout arg here
+                out["debug"]["click_attempts"].append({"method":"coord_click","x":click_x,"y":click_y,"ok":True})
+                page.wait_for_timeout(1500)
             except Exception as e_coord:
-                out["debug"].setdefault("click_attempts", []).append({"method":"coord_click","ok":False,"error":str(e_coord)})
-                # fallback: try common small icon selectors
-                fallback = ["#form1\\:acksearch","a#form1\\:acksearch","img#form1\\:acksearch","button#form1\\:acksearch","input[type='submit']"]
+                out["debug"]["click_attempts"].append({"method":"coord_click","ok":False,"error":str(e_coord)})
+                # fallback selectors (try clickable elements near form)
+                fallback = ["#form1\\:acksearch", "a#form1\\:acksearch", "img#form1\\:acksearch", "button#form1\\:acksearch", "input[type='submit']"]
                 clicked = None
                 for fsel in fallback:
                     try:
                         page.wait_for_selector(fsel, timeout=1500)
                         page.click(fsel, timeout=2000)
+                        out["debug"]["click_attempts"].append({"method":"fallback_selector","selector":fsel,"ok":True})
                         clicked = fsel
-                        out["debug"].setdefault("click_attempts", []).append({"method":"fallback_selector","selector":fsel,"ok":True})
                         page.wait_for_timeout(1200)
                         break
                     except Exception as efs:
-                        out["debug"].setdefault("click_attempts", []).append({"method":"fallback_selector","selector":fsel,"ok":False,"error":str(efs)})
+                        out["debug"]["click_attempts"].append({"method":"fallback_selector","selector":fsel,"ok":False,"error":str(efs)})
                 if not clicked:
                     ss = SCREENSHOT_DIR / f"click_fail_{app_no}_{int(time.time())}.png"
                     page.screenshot(path=str(ss), full_page=True)
-                    out["screenshot"] = str(ss)
-                    out["raw_text"] = page.content()[:2000]
+                    out.update({"screenshot": str(ss), "raw_text": page.content()[:2000]})
                     out["status"] = "error"
                     page.close(); browser.close()
                     return out
 
-            # screenshot after click
             ss = SCREENSHOT_DIR / f"afterclick_{app_no}_{int(time.time())}.png"
             page.screenshot(path=str(ss), full_page=True)
             out["screenshot"] = str(ss)
 
-            # read page body
             try:
                 body = page.inner_text("body", timeout=3000)
             except Exception:
@@ -119,14 +117,8 @@ def query_tnedistrict_status(app_no: str, headless: bool = True, timeout_ms: int
             return out
 
     except PWTimeout as t:
-        out["status"]="error"; out["raw_text"]=f"Timeout: {t}"; return out
+        out["status"] = "error"; out["raw_text"] = f"Timeout: {t}"; return out
     except PWError as e:
-        out["status"]="error"; out["raw_text"]=f"Playwright error: {e}"; return out
+        out["status"] = "error"; out["raw_text"] = f"Playwright error: {e}"; return out
     except Exception as e:
-        out["status"]="error"; out["raw_text"]=f"Exception: {e}\
-{traceback.format_exc()}"; return out
-
-
-
-
-
+        out["status"] = "error"; out["raw_text"] = f"Exception: {e}\\n{traceback.format_exc()}"; return out
