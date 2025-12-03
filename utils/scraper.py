@@ -1,4 +1,4 @@
-# utils/scraper.py
+﻿# utils/scraper.py
 # Stable Playwright scraper for TN e-District VerifyCerti.xhtml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout, Error as PWError
 from pathlib import Path
@@ -27,8 +27,8 @@ def query_tnedistrict_status(app_no: str, headless: bool = True, timeout_ms: int
 
             # Try precise selectors first, then fallbacks
             ack_selectors = [
-                "#form1\\:acknumber",        # precise JSF id if present
-                "input[id*='ack']",          # any id containing ack
+                "#form1\\:acknumber",
+                "input[id*='ack']",
                 "input[name*='ack']",
                 "input[placeholder*='ack']",
                 "input[type='text']"
@@ -64,7 +64,7 @@ def query_tnedistrict_status(app_no: str, headless: bool = True, timeout_ms: int
                 click_x = box["x"] + box["width"] + 18  # 18px right of input
                 click_y = box["y"] + box["height"] / 2
                 page.wait_for_timeout(300)
-                page.mouse.click(click_x, click_y)   # no timeout arg here
+                page.mouse.click(click_x, click_y)
                 out["debug"]["click_attempts"].append({"method":"coord_click","x":click_x,"y":click_y,"ok":True})
                 page.wait_for_timeout(1500)
             except Exception as e_coord:
