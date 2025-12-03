@@ -1,0 +1,7 @@
+fastapi>=0.95
+uvicorn[standard]>=0.22
+playwright>=1.45
+httpx>=0.24
+python-dotenv>=1.0
+pyqrcode>=1.2
+pydantic>=1.10
